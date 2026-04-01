@@ -1,0 +1,10 @@
+[
+  {
+    "id": "proj-ccam",
+    "name": "ccam",
+    "path": "/Users/suenot/projects/cmdop-agent-manager",
+    "icon": "🤖",
+    "description": "Open Agent Manager itself",
+    "env_vars": {}
+  }
+]
