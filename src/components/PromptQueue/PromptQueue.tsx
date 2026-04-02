@@ -18,7 +18,35 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { restrictToVerticalAxis, restrictToWindowEdges } from "@dnd-kit/modifiers";
 import { useStore, getPromptsForProject } from "../../stores/store";
-import type { PromptCard } from "../../types";
+import type { PromptCard, PromptAttachment } from "../../types";
+
+function fileToAttachment(file: File): Promise<PromptAttachment> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      resolve({
+        id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        name: file.name,
+        mime: file.type || "application/octet-stream",
+        dataUrl: reader.result as string,
+      });
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function isImageMime(mime: string): boolean {
+  return mime.startsWith("image/");
+}
+
+function getFileIcon(mime: string): string {
+  if (mime.startsWith("image/")) return "img";
+  if (mime.includes("pdf")) return "pdf";
+  if (mime.includes("text") || mime.includes("json") || mime.includes("xml") || mime.includes("javascript") || mime.includes("typescript")) return "txt";
+  if (mime.includes("zip") || mime.includes("tar") || mime.includes("gzip")) return "zip";
+  return "file";
+}
 
 interface SortablePromptCardProps {
   card: PromptCard;
@@ -27,6 +55,8 @@ interface SortablePromptCardProps {
   onUpdate: (card: PromptCard) => void;
   onImagePaste: (e: React.ClipboardEvent, card: PromptCard) => void;
   onRemoveImage: (card: PromptCard, imgIdx: number) => void;
+  onAddFiles: (card: PromptCard, files: File[]) => void;
+  onRemoveAttachment: (card: PromptCard, attIdx: number) => void;
 }
 
 function PromptCardItem({
@@ -36,22 +66,73 @@ function PromptCardItem({
   onUpdate,
   onImagePaste,
   onRemoveImage,
+  onAddFiles,
+  onRemoveAttachment,
   isOverlay = false,
   dragHandleProps = {},
   style = {},
   innerRef,
 }: SortablePromptCardProps & { isOverlay?: boolean; dragHandleProps?: any; style?: any; innerRef?: any }) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isFileDragOver, setIsFileDragOver] = useState(false);
+
+  const hasContent = !!(card.text.trim() || card.images.length > 0 || (card.attachments && card.attachments.length > 0));
+
+  const handleNativeDragStart = (e: React.DragEvent) => {
+    if (!hasContent) {
+      e.preventDefault();
+      return;
+    }
+    e.dataTransfer.setData(
+      "application/ccam-prompt",
+      JSON.stringify({ cardId: card.id, projectId })
+    );
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleFileDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsFileDragOver(false);
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0) {
+      onAddFiles(card, files);
+    }
+  };
+
+  const handleFileDragOver = (e: React.DragEvent) => {
+    // Only respond to file drags, not prompt card drags
+    if (e.dataTransfer.types.includes("Files")) {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsFileDragOver(true);
+    }
+  };
+
+  const handleFileDragLeave = (e: React.DragEvent) => {
+    e.stopPropagation();
+    setIsFileDragOver(false);
+  };
+
+  const attachments = card.attachments || [];
+
   return (
     <div
       ref={innerRef}
       style={style}
+      draggable={!isOverlay && hasContent}
+      onDragStart={handleNativeDragStart}
+      onDrop={handleFileDrop}
+      onDragOver={handleFileDragOver}
+      onDragLeave={handleFileDragLeave}
       className={`
-        relative p-4 bg-zinc-900/50 border border-white/5 rounded-xl group transition-all duration-300
+        relative p-4 bg-zinc-900/50 border rounded-xl group transition-all duration-300
         ${isOverlay ? "bg-zinc-800 border-white/20 z-50 scale-105 shadow-2xl" : "hover:border-zinc-700"}
+        ${isFileDragOver ? "border-blue-500/50 bg-blue-500/5 ring-1 ring-blue-500/20" : "border-white/5"}
       `}
     >
       <div className="flex items-start gap-3">
-        {/* Drag Handle */}
+        {/* Drag Handle — for @dnd-kit reordering within queue */}
         <div
           {...dragHandleProps}
           className="mt-2 text-zinc-600 hover:text-zinc-300 cursor-grab active:cursor-grabbing transition-colors"
@@ -75,6 +156,7 @@ function PromptCardItem({
             }}
           />
 
+          {/* Pasted images (legacy) */}
           {card.images.length > 0 && (
             <div className="flex flex-wrap gap-2 pt-2 border-t border-white/5">
               {card.images.map((img, i) => (
@@ -94,6 +176,69 @@ function PromptCardItem({
               ))}
             </div>
           )}
+
+          {/* File attachments */}
+          {attachments.length > 0 && (
+            <div className="flex flex-wrap gap-2 pt-2 border-t border-white/5">
+              {attachments.map((att, i) => (
+                <div key={att.id} className="relative group/att">
+                  {isImageMime(att.mime) ? (
+                    <img
+                      src={att.dataUrl}
+                      alt={att.name}
+                      className="w-16 h-16 rounded-lg object-cover border border-white/10"
+                      title={att.name}
+                    />
+                  ) : (
+                    <div
+                      className="w-16 h-16 rounded-lg border border-white/10 bg-zinc-800 flex flex-col items-center justify-center gap-1"
+                      title={att.name}
+                    >
+                      <span className="text-[10px] font-bold text-zinc-400 uppercase">{getFileIcon(att.mime)}</span>
+                      <span className="text-[8px] text-zinc-500 truncate max-w-[56px] px-1">{att.name}</span>
+                    </div>
+                  )}
+                  <button
+                    onClick={() => onRemoveAttachment(card, i)}
+                    className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center text-[10px] opacity-0 group-hover/att:opacity-100 transition-all shadow-lg border border-white/20"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Action bar: attach files + drag-to-terminal hint */}
+          <div className="flex items-center gap-2 pt-1">
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="flex items-center gap-1.5 text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors px-2 py-1 rounded-md hover:bg-white/5"
+              title="Attach files"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+              </svg>
+              Attach
+            </button>
+            {hasContent && (
+              <span className="text-[10px] text-zinc-600 ml-auto">Drag to terminal</span>
+            )}
+          </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(e) => {
+              const files = Array.from(e.target.files || []);
+              if (files.length > 0) {
+                onAddFiles(card, files);
+              }
+              // Reset input so the same file can be selected again
+              e.target.value = "";
+            }}
+          />
         </div>
 
         <button
@@ -103,6 +248,13 @@ function PromptCardItem({
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
         </button>
       </div>
+
+      {/* File drag overlay hint */}
+      {isFileDragOver && (
+        <div className="absolute inset-0 rounded-xl bg-blue-500/10 border-2 border-dashed border-blue-500/40 flex items-center justify-center pointer-events-none z-10">
+          <span className="text-sm font-medium text-blue-400">Drop files to attach</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -168,6 +320,7 @@ export function PromptQueue({ projectId }: PromptQueueProps) {
       id: `prompt-${Date.now()}`,
       text: "",
       images: [],
+      attachments: [],
     };
     addPrompt(projectId, card);
   };
@@ -202,6 +355,31 @@ export function PromptQueue({ projectId }: PromptQueueProps) {
     updatePrompt(projectId, {
       ...card,
       images: card.images.filter((_, i) => i !== imgIdx),
+    });
+  };
+
+  const handleAddFiles = async (card: PromptCard, files: File[]) => {
+    const newAttachments: PromptAttachment[] = [];
+    for (const file of files) {
+      try {
+        const att = await fileToAttachment(file);
+        newAttachments.push(att);
+      } catch (err) {
+        console.error("Failed to read file:", err);
+      }
+    }
+    if (newAttachments.length > 0) {
+      updatePrompt(projectId, {
+        ...card,
+        attachments: [...(card.attachments || []), ...newAttachments],
+      });
+    }
+  };
+
+  const handleRemoveAttachment = (card: PromptCard, attIdx: number) => {
+    updatePrompt(projectId, {
+      ...card,
+      attachments: (card.attachments || []).filter((_, i) => i !== attIdx),
     });
   };
 
@@ -263,6 +441,8 @@ export function PromptQueue({ projectId }: PromptQueueProps) {
                   onUpdate={(updated) => updatePrompt(projectId, updated)}
                   onImagePaste={handleImagePaste}
                   onRemoveImage={handleRemoveImage}
+                  onAddFiles={handleAddFiles}
+                  onRemoveAttachment={handleRemoveAttachment}
                 />
               ))}
             </div>
@@ -295,6 +475,8 @@ export function PromptQueue({ projectId }: PromptQueueProps) {
               onUpdate={() => { }}
               onImagePaste={() => { }}
               onRemoveImage={() => { }}
+              onAddFiles={() => { }}
+              onRemoveAttachment={() => { }}
               isOverlay
             />
           ) : null}

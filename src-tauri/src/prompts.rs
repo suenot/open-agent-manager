@@ -4,11 +4,22 @@ use std::path::PathBuf;
 use tauri::Manager;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptAttachment {
+    pub id: String,
+    pub name: String,
+    pub mime: String,
+    #[serde(rename = "dataUrl")]
+    pub data_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromptCard {
     pub id: String,
     pub text: String,
     #[serde(default)]
     pub images: Vec<String>,
+    #[serde(default)]
+    pub attachments: Vec<PromptAttachment>,
 }
 
 type PromptsStore = HashMap<String, Vec<PromptCard>>;

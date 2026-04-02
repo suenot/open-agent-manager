@@ -30,6 +30,7 @@ pub fn run() {
             projects::save_projects,
             projects::archive_project,
             projects::restore_project,
+            projects::duplicate_project,
             projects::get_project_icon,
             prompts::get_prompts,
             prompts::save_prompts,

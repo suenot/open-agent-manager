@@ -1,12 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useStore, getTasksForProject } from "./stores/store";
+import { useStore } from "./stores/store";
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { TerminalPane } from "./components/Terminal/TerminalPane";
 import { RemoteTerminalPane } from "./components/Terminal/RemoteTerminalPane";
 import { PromptQueue } from "./components/PromptQueue/PromptQueue";
-import { TaskPanel } from "./components/TaskPanel/TaskPanel";
 import { AddProjectModal } from "./components/Sidebar/AddProjectModal";
 import { SettingsModal } from "./components/Settings/SettingsModal";
 import { ServerListModal } from "./components/Sidebar/ServerListModal";
@@ -28,9 +26,6 @@ function App() {
   const showServerList = useStore((s) => s.showServerList);
   const showSettings = useStore((s) => s.showSettings);
   const showPromptQueue = useStore((s) => s.showPromptQueue);
-  const showTaskPanel = useStore((s) => s.showTaskPanel);
-  const setShowTaskPanel = useStore((s) => s.setShowTaskPanel);
-  const projectTasks = useStore((s) => s.tasks);
   const removePrompt = useStore((s) => s.removePrompt);
   const prompts = useStore((s) => s.prompts);
   const settings = useStore((s) => s.settings);
@@ -79,17 +74,50 @@ function App() {
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
 
-  const handlePromptDrop = (e: React.DragEvent) => {
+  const [dropHighlight, setDropHighlight] = useState(false);
+
+  const handlePromptDrop = async (e: React.DragEvent) => {
     e.preventDefault();
+    setDropHighlight(false);
     const raw = e.dataTransfer.getData("application/ccam-prompt");
     if (!raw || !activeSessionId) return;
     try {
       const { cardId, projectId } = JSON.parse(raw);
       const cards = prompts[projectId] || [];
-      const card = cards.find((c) => c.id === cardId);
-      if (card && card.text.trim()) {
-        ptyRegistry.write(activeSessionId, card.text.trim() + "\n");
+      const card = cards.find((c: any) => c.id === cardId);
+      if (!card) return;
+
+      const sid = activeSessionId;
+
+      // Collect all media items: legacy images + new attachments
+      const allMedia: { dataUrl: string; name: string }[] = [];
+      for (const img of card.images || []) {
+        allMedia.push({ dataUrl: img, name: "pasted-image" });
       }
+      for (const att of card.attachments || []) {
+        allMedia.push({ dataUrl: att.dataUrl, name: att.name });
+      }
+
+      // Sequential paste: files first (one by one), then text last.
+      // Each file is pasted by writing its data URL path to the terminal.
+      // For Claude Code, images/files are typically pasted via the clipboard,
+      // but in a PTY context we write the base64 data as text.
+      // The approach: for each media, write a reference line, then pause briefly.
+      for (let i = 0; i < allMedia.length; i++) {
+        const media = allMedia[i];
+        // Write file content as a base64 data URL line that CLI agents can parse
+        ptyRegistry.write(sid, media.dataUrl);
+        // Small delay between items so the terminal can process each one
+        if (i < allMedia.length - 1 || card.text.trim()) {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+      }
+
+      // Finally, paste the text content
+      if (card.text.trim()) {
+        ptyRegistry.write(sid, card.text.trim() + "\n");
+      }
+
       removePrompt(projectId, cardId);
     } catch {
       // ignore
@@ -110,20 +138,35 @@ function App() {
         <div className="flex-1 flex min-h-0 relative">
           {/* Terminal area — drop zone for prompt cards */}
           <div
-            className="flex-1 relative bg-zinc-950"
+            className={`flex-1 relative bg-zinc-950 transition-all duration-200 ${dropHighlight ? "ring-2 ring-inset ring-blue-500/40" : ""}`}
             onDragOver={(e) => {
               if (e.dataTransfer.types.includes("application/ccam-prompt")) {
                 e.preventDefault();
                 e.dataTransfer.dropEffect = "move";
+                setDropHighlight(true);
+              }
+            }}
+            onDragLeave={(e) => {
+              // Only clear if leaving the container itself
+              if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                setDropHighlight(false);
               }
             }}
             onDrop={handlePromptDrop}
           >
+            {/* Drop highlight overlay */}
+            {dropHighlight && activeSession && (
+              <div className="absolute inset-0 z-30 pointer-events-none flex items-center justify-center bg-blue-500/5">
+                <div className="px-6 py-3 rounded-xl bg-blue-500/15 border border-blue-500/30 backdrop-blur-sm">
+                  <span className="text-sm font-medium text-blue-300">Drop prompt card here to send to terminal</span>
+                </div>
+              </div>
+            )}
+
             {/* Empty state */}
             {!activeSession && (
               <div className="flex items-center justify-center h-full">
                 <div className="text-center">
-                  <div className="text-6xl mb-6 opacity-20 filter blur-sm animate-pulse">🤖</div>
                   <h2 className="text-xl font-medium text-zinc-300 mb-2">Ready to Code</h2>
                   <div className="text-sm text-zinc-500 max-w-md mx-auto leading-relaxed">
                     Select a project from the sidebar to launch a terminal session.
@@ -197,30 +240,6 @@ function App() {
           {/* Task Panel — right drawer overlay (REMOVED) */}
         </div>
 
-        {/* Status bar */}
-        <div className="flex items-center gap-4 px-4 py-1.5 bg-zinc-950 border-t border-white/5 text-[10px] text-zinc-500 uppercase tracking-wider font-mono select-none">
-          <div className="flex items-center gap-2">
-            <div className={`w-1.5 h-1.5 rounded-full ${sessions.some(s => s.status === "running") ? "bg-emerald-500 animate-pulse" : "bg-zinc-700"}`} />
-            <span>
-              {sessions.filter((s) => s.status === "running").length} agent(s) active
-            </span>
-          </div>
-
-          <span className="ml-auto flex items-center gap-4">
-            {/* Task panel toggle */}
-            <button
-              onClick={async () => {
-                const win = getCurrentWindow();
-                await win.maximize();
-                await invoke("toggle_devtools");
-              }}
-              className="hover:text-blue-400 transition-colors cursor-pointer flex items-center gap-1"
-              title="Toggle DevTools (F12)"
-            >
-              <span>DEV</span>
-            </button>
-          </span>
-        </div>
       </div>
       <ErrorOverlay />
     </div>

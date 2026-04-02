@@ -190,8 +190,14 @@ export function TerminalTabs() {
     setCliMenu(null);
   };
 
-  const handleAddClick = () => {
-    // Default: add claude session
+  const handleAddClick = (e: React.MouseEvent) => {
+    if (e.altKey) {
+      // Option/Alt + click: show CLI picker
+      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      setCliMenu({ x: rect.left, y: rect.bottom + 4 });
+      return;
+    }
+    // Default: add session with project's default CLI
     handleAddSession(activeProject?.cli || "claude");
   };
 
@@ -276,7 +282,7 @@ export function TerminalTabs() {
           onPointerUp={handleAddPointerUp}
           onPointerLeave={handleAddPointerUp}
           className="ml-2 w-8 h-8 flex items-center justify-center text-zinc-500 hover:text-white hover:bg-white/10 rounded-md transition-all duration-200"
-          title="New session (right-click for options)"
+          title="New session (⌥/Alt+click or right-click to choose agent)"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <line x1="12" y1="5" x2="12" y2="19"></line>

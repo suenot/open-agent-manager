@@ -40,10 +40,21 @@ export interface Server {
 
 export type SidebarTab = "active" | "archive" | "import";
 
+export interface PromptAttachment {
+  id: string;
+  name: string;
+  /** MIME type, e.g. "image/png", "application/pdf" */
+  mime: string;
+  /** Data URL (base64-encoded) for the file content */
+  dataUrl: string;
+}
+
 export interface PromptCard {
   id: string;
   text: string;
   images: string[];
+  /** File/media attachments (images, documents, etc.) */
+  attachments?: PromptAttachment[];
 }
 
 export type TaskStatus = "todo" | "in_progress" | "done";

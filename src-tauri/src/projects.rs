@@ -130,6 +130,46 @@ pub fn archive_project(app_handle: tauri::AppHandle, project_id: String) -> Resu
 }
 
 #[tauri::command]
+pub fn duplicate_project(app_handle: tauri::AppHandle, project_id: String) -> Result<Vec<Project>, String> {
+    let file_path = projects_file(&app_handle)?;
+    let mut projects = get_projects(app_handle)?;
+
+    let source = projects.iter().find(|p| p.id == project_id)
+        .ok_or_else(|| format!("Project '{}' not found", project_id))?
+        .clone();
+
+    let new_project = Project {
+        id: format!("proj-{}", uuid_v4()),
+        name: format!("{} (copy)", source.name),
+        archived: false,
+        ..source
+    };
+
+    projects.push(new_project);
+    write_projects(&file_path, &projects)?;
+
+    Ok(projects)
+}
+
+/// Simple UUID v4 generator (random)
+fn uuid_v4() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    // Use a combination of timestamp nanos and a simple counter for uniqueness
+    format!(
+        "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
+        (seed & 0xFFFF_FFFF) as u32,
+        ((seed >> 32) & 0xFFFF) as u16,
+        ((seed >> 48) & 0x0FFF) as u16,
+        (0x8000 | ((seed >> 60) & 0x3FFF)) as u16,
+        ((seed >> 74) ^ (seed & 0xFFFF_FFFF_FFFF)) as u64 & 0xFFFF_FFFF_FFFF,
+    )
+}
+
+#[tauri::command]
 pub fn restore_project(app_handle: tauri::AppHandle, project_id: String) -> Result<Vec<Project>, String> {
     let file_path = projects_file(&app_handle)?;
     let mut projects = get_projects(app_handle)?;
