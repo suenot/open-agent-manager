@@ -12,7 +12,7 @@ import { AddServerModal } from "./components/Sidebar/AddServerModal";
 import { TerminalTabs } from "./components/Terminal/TerminalTabs";
 import { ErrorOverlay } from "./components/ErrorOverlay/ErrorOverlay";
 import { ptyRegistry } from "./utils/ptyRegistry";
-import type { Project, Server } from "./types";
+import type { Project, Server, TerminalSession } from "./types";
 
 function App() {
   const projects = useStore((s) => s.projects);
@@ -21,6 +21,8 @@ function App() {
   const sessions = useStore((s) => s.sessions);
   const activeSessionId = useStore((s) => s.activeSessionId);
   const updateSessionStatus = useStore((s) => s.updateSessionStatus);
+  const setSessions = useStore((s) => s.setSessions);
+  const setActiveSessionId = useStore((s) => s.setActiveSessionId);
   const showAddProject = useStore((s) => s.showAddProject);
   const showAddServer = useStore((s) => s.showAddServer);
   const showServerList = useStore((s) => s.showServerList);
@@ -32,6 +34,7 @@ function App() {
   const addError = useStore((s) => s.addError);
 
   useEffect(() => {
+    // Load projects and servers
     invoke<Project[]>("get_projects")
       .then(setProjects)
       .catch((err) => {
@@ -44,7 +47,28 @@ function App() {
         console.error("Failed to load servers:", err);
         addError("Servers", "Failed to load servers", String(err));
       });
-  }, [setProjects, setServers, addError]);
+
+    // Restore persisted terminal sessions
+    invoke<TerminalSession[]>("get_sessions")
+      .then((saved) => {
+        if (saved && saved.length > 0) {
+          // Mark all restored sessions with new IDs and the restored flag
+          const restored = saved.map((s) => ({
+            ...s,
+            id: `session-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            status: "running" as const,
+            restored: true,
+          }));
+          setSessions(restored);
+          // Activate the last session
+          setActiveSessionId(restored[restored.length - 1].id);
+          console.log(`[Sessions] Restored ${restored.length} session(s) from disk`);
+        }
+      })
+      .catch((err) => {
+        console.warn("Failed to restore sessions:", err);
+      });
+  }, [setProjects, setServers, setSessions, setActiveSessionId, addError]);
 
   const toggleSidebar = useStore((s) => s.toggleSidebar);
 
@@ -72,9 +96,78 @@ function App() {
     };
   }, [addError, toggleSidebar]);
 
+  // Kill all PTY processes when window is closing to prevent app hang
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      ptyRegistry.killAll();
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, []);
+
   const activeSession = sessions.find((s) => s.id === activeSessionId);
 
+  // Track which sessions have been activated at least once (for lazy mounting)
+  const [mountedSessionIds, setMountedSessionIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    if (activeSessionId) {
+      setMountedSessionIds((prev) => {
+        if (prev.has(activeSessionId)) return prev;
+        const next = new Set(prev);
+        next.add(activeSessionId);
+        return next;
+      });
+    }
+  }, [activeSessionId]);
+
   const [dropHighlight, setDropHighlight] = useState(false);
+
+  // Paste a prompt card's content (files + text) into the active terminal
+  const pasteCardToTerminal = async (card: any, projectId?: string) => {
+    if (!activeSessionId) return;
+    const sid = activeSessionId;
+
+    // Collect all media items: legacy images + new attachments
+    const allMedia: { dataUrl: string; name: string }[] = [];
+    for (const img of card.images || []) {
+      allMedia.push({ dataUrl: img, name: "pasted-image.png" });
+    }
+    for (const att of card.attachments || []) {
+      allMedia.push({ dataUrl: att.dataUrl, name: att.name });
+    }
+
+    // Save each media item to a temp file, then write the file path to the terminal.
+    const filePaths: string[] = [];
+    for (const media of allMedia) {
+      try {
+        const filePath = await invoke<string>("save_temp_file", {
+          data: media.dataUrl,
+          name: media.name,
+        });
+        filePaths.push(filePath);
+      } catch (err) {
+        console.error("Failed to save temp file:", media.name, err);
+      }
+    }
+
+    // Build the text to write to the terminal:
+    // file paths first (space-separated), then the prompt text.
+    const parts: string[] = [];
+    if (filePaths.length > 0) {
+      parts.push(filePaths.join(" "));
+    }
+    if (card.text.trim()) {
+      parts.push(card.text.trim());
+    }
+
+    if (parts.length > 0) {
+      ptyRegistry.write(sid, parts.join(" ") + "\n");
+    }
+
+    if (projectId) {
+      removePrompt(projectId, card.id);
+    }
+  };
 
   const handlePromptDrop = async (e: React.DragEvent) => {
     e.preventDefault();
@@ -86,49 +179,7 @@ function App() {
       const cards = prompts[projectId] || [];
       const card = cards.find((c: any) => c.id === cardId);
       if (!card) return;
-
-      const sid = activeSessionId;
-
-      // Collect all media items: legacy images + new attachments
-      const allMedia: { dataUrl: string; name: string }[] = [];
-      for (const img of card.images || []) {
-        allMedia.push({ dataUrl: img, name: "pasted-image.png" });
-      }
-      for (const att of card.attachments || []) {
-        allMedia.push({ dataUrl: att.dataUrl, name: att.name });
-      }
-
-      // Save each media item to a temp file, then write the file path to the terminal.
-      // This avoids dumping huge base64 strings into the PTY. CLI agents like
-      // Claude Code can accept file paths as arguments.
-      const filePaths: string[] = [];
-      for (const media of allMedia) {
-        try {
-          const filePath = await invoke<string>("save_temp_file", {
-            data: media.dataUrl,
-            name: media.name,
-          });
-          filePaths.push(filePath);
-        } catch (err) {
-          console.error("Failed to save temp file:", media.name, err);
-        }
-      }
-
-      // Build the text to write to the terminal:
-      // file paths first (space-separated on one line), then the prompt text.
-      const parts: string[] = [];
-      if (filePaths.length > 0) {
-        parts.push(filePaths.join(" "));
-      }
-      if (card.text.trim()) {
-        parts.push(card.text.trim());
-      }
-
-      if (parts.length > 0) {
-        ptyRegistry.write(sid, parts.join(" ") + "\n");
-      }
-
-      removePrompt(projectId, cardId);
+      await pasteCardToTerminal(card, projectId);
     } catch {
       // ignore
     }
@@ -185,10 +236,12 @@ function App() {
               </div>
             )}
 
-            {/* Terminal panes — all mounted, visibility toggled */}
+            {/* Terminal panes — lazy mounted on first activation */}
             {sessions.map((session) => {
               const project = projects.find((p) => p.id === session.projectId);
               if (!project) return null;
+              // Only mount sessions that have been active at least once
+              if (!mountedSessionIds.has(session.id)) return null;
 
               const isRemote = !!project.remote;
               const isSsh = isRemote && project.remote?.type === "ssh";
@@ -214,6 +267,8 @@ function App() {
                       settings={settings}
                       cli={session.cli || project.cli}
                       sshConfig={project.remote}
+                      restored={session.restored}
+                      agentSessionId={session.agentSessionId}
                     />
                   ) : isCmdop ? (
                     <RemoteTerminalPane
@@ -233,6 +288,8 @@ function App() {
                       onExit={() => updateSessionStatus(session.id, "stopped")}
                       settings={settings}
                       cli={session.cli || project.cli}
+                      restored={session.restored}
+                      agentSessionId={session.agentSessionId}
                     />
                   )}
                 </div>
@@ -243,7 +300,10 @@ function App() {
           {/* Prompt Queue panel (toggleable) */}
           {showPromptQueue && activeSession && (
             <div className="w-80 border-l border-white/5 bg-zinc-900/50 backdrop-blur-sm">
-              <PromptQueue projectId={activeSession.projectId} />
+              <PromptQueue
+                projectId={activeSession.projectId}
+                onPasteToTerminal={(card) => pasteCardToTerminal(card, activeSession.projectId)}
+              />
             </div>
           )}
 

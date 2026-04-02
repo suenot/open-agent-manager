@@ -14,6 +14,17 @@ export interface AppSettings {
 const SETTINGS_KEY = "ccam-settings";
 const CMDOP_AUTH_KEY = "ccam-cmdop-auth";
 
+/** Debounced save of sessions to disk via Tauri backend */
+let _sessionSaveTimer: ReturnType<typeof setTimeout> | null = null;
+function debouncedSaveSessions(sessions: TerminalSession[]) {
+  if (_sessionSaveTimer) clearTimeout(_sessionSaveTimer);
+  _sessionSaveTimer = setTimeout(() => {
+    invoke("save_sessions", { sessions }).catch((e) => {
+      console.warn("Failed to persist sessions:", e);
+    });
+  }, 300);
+}
+
 const defaultSettings: AppSettings = {
   useTmux: false,
   teammateMode: "auto",
@@ -134,17 +145,22 @@ export const useStore = create<AppState>((set, get) => ({
   sessions: [],
   activeSessionId: null,
   setActiveSessionId: (id) => set({ activeSessionId: id }),
-  setSessions: (sessions) => set({ sessions }),
+  setSessions: (sessions) => {
+    debouncedSaveSessions(sessions);
+    set({ sessions });
+  },
 
   addSession: (session) =>
-    set((state) => ({
-      sessions: [...state.sessions, session],
-      activeSessionId: session.id,
-    })),
+    set((state) => {
+      const next = [...state.sessions, session];
+      debouncedSaveSessions(next);
+      return { sessions: next, activeSessionId: session.id };
+    }),
 
   removeSession: (sessionId) =>
     set((state) => {
       const remaining = state.sessions.filter((s) => s.id !== sessionId);
+      debouncedSaveSessions(remaining);
       const newActive =
         state.activeSessionId === sessionId
           ? remaining.length > 0
@@ -155,29 +171,38 @@ export const useStore = create<AppState>((set, get) => ({
     }),
 
   updateSessionStatus: (sessionId, status) =>
-    set((state) => ({
-      sessions: state.sessions.map((s) =>
+    set((state) => {
+      const next = state.sessions.map((s) =>
         s.id === sessionId ? { ...s, status } : s,
-      ),
-    })),
+      );
+      // Only persist meaningful status changes (not transient running/idle flickers)
+      if (status === "stopped" || status === "error") {
+        debouncedSaveSessions(next);
+      }
+      return { sessions: next };
+    }),
 
   updateSession: (sessionId, patch) =>
-    set((state) => ({
-      sessions: state.sessions.map((s) =>
+    set((state) => {
+      const next = state.sessions.map((s) =>
         s.id === sessionId ? { ...s, ...patch } : s,
-      ),
-    })),
+      );
+      debouncedSaveSessions(next);
+      return { sessions: next };
+    }),
 
   renameSession: (sessionId, name) =>
-    set((state) => ({
-      sessions: state.sessions.map((s) =>
+    set((state) => {
+      const next = state.sessions.map((s) =>
         s.id === sessionId
           ? name.trim()
             ? { ...s, customName: name.trim(), manuallyRenamed: true }
             : { ...s, customName: undefined, manuallyRenamed: false }
           : s,
-      ),
-    })),
+      );
+      debouncedSaveSessions(next);
+      return { sessions: next };
+    }),
 
   showAddProject: false,
   setShowAddProject: (show) => set({ showAddProject: show }),

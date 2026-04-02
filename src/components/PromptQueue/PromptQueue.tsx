@@ -57,6 +57,7 @@ interface SortablePromptCardProps {
   onRemoveImage: (card: PromptCard, imgIdx: number) => void;
   onAddFiles: (card: PromptCard, files: File[]) => void;
   onRemoveAttachment: (card: PromptCard, attIdx: number) => void;
+  onPasteToTerminal: (card: PromptCard) => void;
 }
 
 function PromptCardItem({
@@ -68,6 +69,7 @@ function PromptCardItem({
   onRemoveImage,
   onAddFiles,
   onRemoveAttachment,
+  onPasteToTerminal,
   isOverlay = false,
   dragHandleProps = {},
   style = {},
@@ -216,7 +218,17 @@ function PromptCardItem({
               Attach
             </button>
             {hasContent && (
-              <span className="text-[10px] text-zinc-600 ml-auto">Drag to terminal</span>
+              <button
+                onClick={() => onPasteToTerminal(card)}
+                className="flex items-center gap-1.5 text-[10px] text-zinc-500 hover:text-blue-400 transition-colors px-2 py-1 rounded-md hover:bg-blue-500/10 ml-auto"
+                title="Paste to terminal"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="17 11 12 6 7 11" />
+                  <line x1="12" y1="18" x2="12" y2="6" />
+                </svg>
+                Paste
+              </button>
             )}
           </div>
           <input
@@ -281,9 +293,10 @@ function SortablePromptCard(props: SortablePromptCardProps) {
 
 interface PromptQueueProps {
   projectId: string;
+  onPasteToTerminal?: (card: PromptCard) => void;
 }
 
-export function PromptQueue({ projectId }: PromptQueueProps) {
+export function PromptQueue({ projectId, onPasteToTerminal }: PromptQueueProps) {
   const prompts = useStore((s) => getPromptsForProject(s, projectId));
   const loadPrompts = useStore((s) => s.loadPrompts);
   const addPrompt = useStore((s) => s.addPrompt);
@@ -437,6 +450,7 @@ export function PromptQueue({ projectId }: PromptQueueProps) {
                   onRemoveImage={handleRemoveImage}
                   onAddFiles={handleAddFiles}
                   onRemoveAttachment={handleRemoveAttachment}
+                  onPasteToTerminal={onPasteToTerminal || (() => {})}
                 />
               ))}
             </div>
@@ -471,6 +485,7 @@ export function PromptQueue({ projectId }: PromptQueueProps) {
               onRemoveImage={() => { }}
               onAddFiles={() => { }}
               onRemoveAttachment={() => { }}
+              onPasteToTerminal={() => { }}
               isOverlay
             />
           ) : null}

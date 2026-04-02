@@ -3,6 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { spawn } from "tauri-pty";
 import type { IPty } from "tauri-pty";
+import { invoke } from "@tauri-apps/api/core";
 import "@xterm/xterm/css/xterm.css";
 import { useStore, type AppSettings } from "../../stores/store";
 import { ptyRegistry } from "../../utils/ptyRegistry";
@@ -17,6 +18,10 @@ interface TerminalPaneProps {
   settings: AppSettings;
   cli?: string;
   sshConfig?: RemoteConfig;
+  /** Whether this session was restored from a previous app run */
+  restored?: boolean;
+  /** The agent's session ID to resume (e.g. Claude conversation UUID) */
+  agentSessionId?: string;
 }
 
 const THEME = {
@@ -52,6 +57,8 @@ export function TerminalPane({
   settings,
   cli,
   sshConfig,
+  restored,
+  agentSessionId,
 }: TerminalPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -66,6 +73,7 @@ export function TerminalPane({
   const addErrorRef = useRef(addError);
   addErrorRef.current = addError;
   const updateSessionStatus = useStore((s) => s.updateSessionStatus);
+  const updateSession = useStore((s) => s.updateSession);
 
   // Main initialization — runs ONCE per mount
   useEffect(() => {
@@ -196,8 +204,34 @@ export function TerminalPane({
       ptyRegistry.register(sessionId, (data) => {
         if (ptyAliveRef.current) pty.write(data);
       });
+      ptyRegistry.registerKill(sessionId, () => {
+        try { pty.kill(); } catch { /* ignore */ }
+      });
       const modeLabel = sshConfig?.type === "ssh" ? `ssh:${sshConfig.user}@${sshConfig.host}` : "local";
       console.log(`[Terminal ${sessionId}] PTY spawned (${modeLabel})`);
+
+      // Detect Claude session ID from ~/.claude/sessions/ after launch
+      // Poll a few times with delay to give Claude time to write its session file
+      if ((cli || "claude") === "claude" && !agentSessionId) {
+        let pollCount = 0;
+        const pollInterval = setInterval(async () => {
+          pollCount++;
+          if (pollCount > 10 || !ptyAliveRef.current) {
+            clearInterval(pollInterval);
+            return;
+          }
+          try {
+            const foundId = await invoke<string | null>("find_claude_session_by_cwd", { cwd });
+            if (foundId) {
+              updateSession(sessionId, { agentSessionId: foundId });
+              console.log(`[Terminal ${sessionId}] Detected Claude session: ${foundId}`);
+              clearInterval(pollInterval);
+            }
+          } catch {
+            // ignore
+          }
+        }, 3000);
+      }
 
       // Idle detection: debounce PTY output to detect when agent is waiting for input
       let idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -249,6 +283,12 @@ export function TerminalPane({
       let cliCmd: string;
       if (cliName === "claude") {
         const flags: string[] = [];
+        // If restoring a previous session with a known agent session ID, resume it
+        if (restored && agentSessionId) {
+          flags.push(`--resume "${agentSessionId}"`);
+        }
+        // Without agentSessionId, just start fresh — don't use --continue
+        // as it would resume an arbitrary recent session, not the one from this tab
         if (settings.dangerouslySkipPermissions) {
           flags.push("--dangerously-skip-permissions");
         }

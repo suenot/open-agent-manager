@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import {
   DndContext,
@@ -60,13 +61,14 @@ import type { TerminalSession } from "../../types";
  *
  * Returns the truncated prompt text or null if not found.
  */
-async function getClaudeAutoName(projectPath: string): Promise<string | null> {
+async function getClaudeAutoName(projectPath: string): Promise<{ name: string; sessionId: string } | null> {
   try {
     const result = await invoke<{ name: string; session_id: string } | null>(
       "get_claude_auto_name",
       { projectPath },
     );
-    return result?.name ?? null;
+    if (!result) return null;
+    return { name: result.name, sessionId: result.session_id };
   } catch {
     // Claude Code not installed, history not found, or command not available
     return null;
@@ -143,6 +145,7 @@ function TabItem({
   }, [isEditing]);
 
   const displayName = getTabDisplayName(session, idx, projectSessionsCount, cliLabel);
+  const cliColor = getCliColor(session.cli);
 
   return (
     <div
@@ -164,9 +167,9 @@ function TabItem({
         ${isOverlay ? "bg-zinc-800 border-white/20 z-50 scale-105 shadow-xl" : ""}
       `}
     >
-      {/* Active Highlight Line */}
+      {/* Active Highlight Line — agent brand color */}
       {isActive && (
-        <div className="absolute top-0 left-0 right-0 h-[2px] bg-blue-500 rounded-full shadow-[0_0_6px_rgba(59,130,246,0.8)]" />
+        <div className={`absolute top-0 left-0 right-0 h-[2px] rounded-full ${cliColor.bg} ${cliColor.glow}`} />
       )}
 
       {isEditing ? (
@@ -245,6 +248,22 @@ function SortableTabItem(props: SortableTabItemProps) {
     />
   );
 }
+// Agent brand colors: [highlight color, glow rgba, hover bg]
+const CLI_COLORS: Record<string, { bg: string; glow: string; text: string }> = {
+  claude:   { bg: "bg-orange-500",  glow: "shadow-[0_0_6px_rgba(249,115,22,0.8)]",  text: "text-orange-400" },
+  gemini:   { bg: "bg-blue-500",    glow: "shadow-[0_0_6px_rgba(59,130,246,0.8)]",   text: "text-blue-400" },
+  aider:    { bg: "bg-green-500",   glow: "shadow-[0_0_6px_rgba(34,197,94,0.8)]",    text: "text-green-400" },
+  codex:    { bg: "bg-emerald-500", glow: "shadow-[0_0_6px_rgba(16,185,129,0.8)]",   text: "text-emerald-400" },
+  opencode: { bg: "bg-cyan-500",    glow: "shadow-[0_0_6px_rgba(6,182,212,0.8)]",    text: "text-cyan-400" },
+  kilocode: { bg: "bg-purple-500",  glow: "shadow-[0_0_6px_rgba(168,85,247,0.8)]",   text: "text-purple-400" },
+  droid:    { bg: "bg-yellow-500",  glow: "shadow-[0_0_6px_rgba(234,179,8,0.8)]",    text: "text-yellow-400" },
+  none:     { bg: "bg-zinc-500",    glow: "shadow-[0_0_6px_rgba(161,161,170,0.8)]",  text: "text-zinc-400" },
+};
+
+function getCliColor(cli?: string) {
+  return CLI_COLORS[cli || "claude"] || CLI_COLORS.claude;
+}
+
 const CLI_PRESETS = [
   { value: "claude", label: "Claude Code" },
   { value: "gemini", label: "Gemini CLI" },
@@ -270,7 +289,7 @@ export function TerminalTabs() {
   const updateSession = useStore((s) => s.updateSession);
 
   const [cliMenu, setCliMenu] = useState<{ x: number; y: number } | null>(null);
-  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const menuRef = useRef<HTMLDivElement>(null);
 
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -313,14 +332,20 @@ export function TerminalTabs() {
 
     if (sessionsToAutoName.length === 0) return;
 
-    // Attempt auto-naming for each qualifying session
-    getClaudeAutoName(activeProject.path).then((autoName) => {
-      if (!autoName) return;
-      // Apply to sessions that still need naming
-      for (const session of sessionsToAutoName) {
-        updateSession(session.id, { autoName });
-      }
-    });
+    // Capture session IDs to avoid stale closures
+    const sessionIds = sessionsToAutoName.map((s) => s.id);
+
+    // Attempt auto-naming for each qualifying session; also capture the Claude session ID
+    getClaudeAutoName(activeProject.path)
+      .then((result) => {
+        if (!result) return;
+        for (const sid of sessionIds) {
+          updateSession(sid, { autoName: result.name });
+        }
+      })
+      .catch(() => {
+        // Silently ignore auto-naming failures
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProject?.path, projectSessions.length]);
 
@@ -339,23 +364,27 @@ export function TerminalTabs() {
   // -----------------------------------------------------------------------
   // Inline rename handlers
   // -----------------------------------------------------------------------
-  const handleStartEditing = useCallback((session: TerminalSession) => {
+  const editCommittedRef = useRef(false);
+
+  const handleStartEditing = (session: TerminalSession) => {
+    editCommittedRef.current = false;
     setEditingTabId(session.id);
     setEditValue(session.customName || "");
-  }, []);
+  };
 
-  const handleEditCommit = useCallback(() => {
-    if (editingTabId) {
-      renameSession(editingTabId, editValue);
-      setEditingTabId(null);
-      setEditValue("");
-    }
-  }, [editingTabId, editValue, renameSession]);
-
-  const handleEditCancel = useCallback(() => {
+  const handleEditCommit = () => {
+    if (editCommittedRef.current || !editingTabId) return;
+    editCommittedRef.current = true;
+    renameSession(editingTabId, editValue);
     setEditingTabId(null);
     setEditValue("");
-  }, []);
+  };
+
+  const handleEditCancel = () => {
+    editCommittedRef.current = true;
+    setEditingTabId(null);
+    setEditValue("");
+  };
 
   const handleAddSession = (cli: string) => {
     if (!activeProject) return;
@@ -370,35 +399,8 @@ export function TerminalTabs() {
     setCliMenu(null);
   };
 
-  const handleAddClick = (e: React.MouseEvent) => {
-    if (e.altKey) {
-      // Option/Alt + click: show CLI picker
-      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-      setCliMenu({ x: rect.left, y: rect.bottom + 4 });
-      return;
-    }
-    // Default: add session with project's default CLI
+  const handleAddClick = () => {
     handleAddSession(activeProject?.cli || "claude");
-  };
-
-  const handleAddContextMenu = (e: React.MouseEvent) => {
-    e.preventDefault();
-    setCliMenu({ x: e.clientX, y: e.clientY });
-  };
-
-  const handleAddPointerDown = (e: React.PointerEvent) => {
-    if (e.button !== 0) return;
-    longPressTimer.current = setTimeout(() => {
-      const rect = (e.target as HTMLElement).getBoundingClientRect();
-      setCliMenu({ x: rect.left, y: rect.bottom + 4 });
-    }, 500);
-  };
-
-  const handleAddPointerUp = () => {
-    if (longPressTimer.current) {
-      clearTimeout(longPressTimer.current);
-      longPressTimer.current = null;
-    }
   };
 
   const handleDragStart = (event: any) => {
@@ -464,12 +466,8 @@ export function TerminalTabs() {
         <div className="ml-2 flex items-center">
           <button
             onClick={handleAddClick}
-            onContextMenu={handleAddContextMenu}
-            onPointerDown={handleAddPointerDown}
-            onPointerUp={handleAddPointerUp}
-            onPointerLeave={handleAddPointerUp}
             className="w-7 h-8 flex items-center justify-center text-zinc-500 hover:text-white hover:bg-white/10 rounded-l-md transition-all duration-200 border-r border-white/5"
-            title="New session (⌥/Alt+click or right-click to choose agent)"
+            title="New session"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <line x1="12" y1="5" x2="12" y2="19"></line>
@@ -514,33 +512,37 @@ export function TerminalTabs() {
           </svg>
         </button>
 
-        {/* CLI menu popup */}
-        {cliMenu && (
+        {/* CLI menu popup — rendered via portal to escape stacking context */}
+        {cliMenu && createPortal(
           <>
-            <div className="fixed inset-0 z-40 bg-black/10" onClick={() => setCliMenu(null)} />
+            <div className="fixed inset-0 z-[9998]" onClick={() => setCliMenu(null)} />
             <div
               ref={menuRef}
-              className="fixed z-50 bg-zinc-900 border border-white/10 rounded-lg shadow-xl py-1 min-w-[200px] backdrop-blur-md animate-fade-in"
-              style={{ left: cliMenu.x, top: cliMenu.y }}
+              className="fixed z-[9999] bg-zinc-900 border border-white/10 rounded-lg shadow-xl py-1 min-w-[200px] backdrop-blur-md"
+              style={{ left: Math.max(8, cliMenu.x), top: cliMenu.y }}
             >
               <div className="px-3 py-2 text-[10px] text-zinc-500 font-semibold uppercase tracking-wider border-b border-white/5 bg-zinc-950/30">
                 Launch New Session
               </div>
-              {CLI_PRESETS.map((preset) => (
-                <button
-                  key={preset.value}
-                  onClick={() => handleAddSession(preset.value)}
-                  className="w-full text-left px-3 py-2 text-sm text-zinc-300 hover:text-white hover:bg-blue-500/10 hover:border-l-2 hover:border-blue-500 transition-all flex items-center gap-3 group"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-zinc-500 group-hover:text-blue-400 transition-colors"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-                  <div className="flex flex-col">
-                    <span className="font-medium">{preset.label}</span>
-                    <span className="text-[10px] text-zinc-600 font-mono">{preset.value}</span>
-                  </div>
-                </button>
-              ))}
+              {CLI_PRESETS.map((preset) => {
+                const color = getCliColor(preset.value);
+                return (
+                  <button
+                    key={preset.value}
+                    onClick={() => handleAddSession(preset.value)}
+                    className="w-full text-left px-3 py-2 text-sm text-zinc-300 hover:text-white hover:bg-white/5 transition-all flex items-center gap-3 group"
+                  >
+                    <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${color.bg}`} />
+                    <div className="flex flex-col">
+                      <span className="font-medium">{preset.label}</span>
+                      <span className="text-[10px] text-zinc-600 font-mono">{preset.value}</span>
+                    </div>
+                  </button>
+                );
+              })}
             </div>
-          </>
+          </>,
+          document.body
         )}
       </div>
 

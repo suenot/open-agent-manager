@@ -80,6 +80,10 @@ export interface TerminalSession {
   manuallyRenamed?: boolean;
   /** Auto-generated name from Claude Code conversation data */
   autoName?: string;
+  /** The agent's own session identifier (e.g., Claude's conversation UUID) */
+  agentSessionId?: string;
+  /** Flag indicating this session was restored from persistence */
+  restored?: boolean;
 }
 
 export interface CmdopAuth {

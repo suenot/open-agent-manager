@@ -3,6 +3,7 @@ mod cmdop;
 mod projects;
 mod prompts;
 mod servers;
+mod sessions;
 mod ssh;
 mod tasks;
 mod tempfiles;
@@ -60,6 +61,10 @@ pub fn run() {
             tasks::save_tasks,
             tempfiles::save_temp_file,
             claude_history::get_claude_auto_name,
+            claude_history::get_claude_sessions,
+            claude_history::find_claude_session_by_cwd,
+            sessions::get_sessions,
+            sessions::save_sessions,
             toggle_devtools,
         ])
         .setup(|app| {
