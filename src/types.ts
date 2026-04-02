@@ -74,6 +74,12 @@ export interface TerminalSession {
   projectIcon: string;
   status: "running" | "idle" | "stopped" | "error";
   cli?: string;
+  /** User-defined custom tab name (set via double-click rename) */
+  customName?: string;
+  /** Whether the user has manually renamed this tab */
+  manuallyRenamed?: boolean;
+  /** Auto-generated name from Claude Code conversation data */
+  autoName?: string;
 }
 
 export interface CmdopAuth {

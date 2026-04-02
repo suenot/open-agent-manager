@@ -156,15 +156,15 @@ function PromptCardItem({
             }}
           />
 
-          {/* Pasted images (legacy) */}
-          {card.images.length > 0 && (
-            <div className="flex flex-wrap gap-2 pt-2 border-t border-white/5">
+          {/* All attachments (pasted images + file attachments) displayed inline */}
+          {(card.images.length > 0 || attachments.length > 0) && (
+            <div className="flex flex-wrap items-start gap-2 pt-2 border-t border-white/5">
               {card.images.map((img, i) => (
-                <div key={i} className="relative group/img">
+                <div key={`img-${i}`} className="relative group/img flex-shrink-0">
                   <img
                     src={img}
                     alt=""
-                    className="w-16 h-16 rounded-lg object-cover border border-white/10"
+                    className="w-[64px] h-[64px] rounded-lg object-cover border border-white/10"
                   />
                   <button
                     onClick={() => onRemoveImage(card, i)}
@@ -174,24 +174,18 @@ function PromptCardItem({
                   </button>
                 </div>
               ))}
-            </div>
-          )}
-
-          {/* File attachments */}
-          {attachments.length > 0 && (
-            <div className="flex flex-wrap gap-2 pt-2 border-t border-white/5">
               {attachments.map((att, i) => (
-                <div key={att.id} className="relative group/att">
+                <div key={att.id} className="relative group/att flex-shrink-0">
                   {isImageMime(att.mime) ? (
                     <img
                       src={att.dataUrl}
                       alt={att.name}
-                      className="w-16 h-16 rounded-lg object-cover border border-white/10"
+                      className="w-[64px] h-[64px] rounded-lg object-cover border border-white/10"
                       title={att.name}
                     />
                   ) : (
                     <div
-                      className="w-16 h-16 rounded-lg border border-white/10 bg-zinc-800 flex flex-col items-center justify-center gap-1"
+                      className="w-[64px] h-[64px] rounded-lg border border-white/10 bg-zinc-800 flex flex-col items-center justify-center gap-1"
                       title={att.name}
                     >
                       <span className="text-[10px] font-bold text-zinc-400 uppercase">{getFileIcon(att.mime)}</span>

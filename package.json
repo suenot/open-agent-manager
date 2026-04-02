@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev --features devtools",
+    "tauri:build": "tauri build"
   },
   "dependencies": {
     "@cmdop/node": "^0.1.1",

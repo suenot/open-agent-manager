@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   DndContext,
@@ -19,15 +19,99 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { restrictToHorizontalAxis, restrictToWindowEdges } from "@dnd-kit/modifiers";
 import { useStore } from "../../stores/store";
+import type { TerminalSession } from "../../types";
+
+// ---------------------------------------------------------------------------
+// Claude Code auto-naming utilities
+// ---------------------------------------------------------------------------
+//
+// Claude Code stores conversation data in ~/.claude/:
+//
+//   ~/.claude/history.jsonl
+//     Each line: { display, project, sessionId, timestamp, ... }
+//     "display" is the user's prompt text, "project" is the cwd path,
+//     "sessionId" is the conversation UUID.
+//
+//   ~/.claude/projects/<encoded-path>/<sessionId>.jsonl
+//     Full conversation log. Each line has "type" (user|assistant|
+//     file-history-snapshot|last-prompt). The first "user" type message
+//     contains { message: { role: "user", content: "<initial prompt>" } }.
+//
+//   ~/.claude/sessions/<pid>.json
+//     Maps OS PIDs to { pid, sessionId, cwd, startedAt, kind, entrypoint }.
+//
+// Auto-naming strategy:
+//   1. Read ~/.claude/history.jsonl and find the most recent entry whose
+//      "project" path matches the session's project path.
+//   2. Use the "display" field (first user prompt) as the auto-generated name,
+//      truncated to a reasonable length.
+//   3. Only apply if the tab has not been manually renamed.
+//
+// This runs client-side via Tauri's fs API. If the files are not accessible
+// (permissions, different OS, Claude Code not installed), it silently falls
+// back to the default CLI label.
+// ---------------------------------------------------------------------------
+
+/**
+ * Attempt to read Claude Code conversation history and extract an auto-name
+ * for a session. Calls the Rust backend command `get_claude_auto_name` which
+ * reads ~/.claude/history.jsonl and finds the most recent user prompt for the
+ * given project path.
+ *
+ * Returns the truncated prompt text or null if not found.
+ */
+async function getClaudeAutoName(projectPath: string): Promise<string | null> {
+  try {
+    const result = await invoke<{ name: string; session_id: string } | null>(
+      "get_claude_auto_name",
+      { projectPath },
+    );
+    return result?.name ?? null;
+  } catch {
+    // Claude Code not installed, history not found, or command not available
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Helper to compute the display name for a tab
+// ---------------------------------------------------------------------------
+function getTabDisplayName(
+  session: TerminalSession,
+  idx: number,
+  projectSessionsCount: number,
+  cliLabel: string,
+): string {
+  // Priority 1: manually set custom name
+  if (session.manuallyRenamed && session.customName) {
+    return session.customName;
+  }
+  // Priority 2: auto-generated name from Claude Code conversation
+  if (session.autoName) {
+    return session.autoName;
+  }
+  // Priority 3: default CLI label + index
+  return cliLabel + (projectSessionsCount > 1 ? ` #${idx + 1}` : "");
+}
+
+// ---------------------------------------------------------------------------
+// Tab components
+// ---------------------------------------------------------------------------
 
 interface SortableTabItemProps {
-  session: any;
+  session: TerminalSession;
   isActive: boolean;
   idx: number;
   projectSessionsCount: number;
   cliLabel: string;
   onSelect: () => void;
   onClose: (e: React.MouseEvent) => void;
+  onDoubleClick: () => void;
+  isEditing: boolean;
+  editValue: string;
+  onEditChange: (value: string) => void;
+  onEditCommit: () => void;
+  onEditCancel: () => void;
 }
 
 function TabItem({
@@ -38,17 +122,38 @@ function TabItem({
   cliLabel,
   onSelect,
   onClose,
+  onDoubleClick,
+  isEditing,
+  editValue,
+  onEditChange,
+  onEditCommit,
+  onEditCancel,
   isOverlay = false,
   dragHandleProps = {},
   style = {},
   innerRef,
 }: SortableTabItemProps & { isOverlay?: boolean; dragHandleProps?: any; style?: any; innerRef?: any }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isEditing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [isEditing]);
+
+  const displayName = getTabDisplayName(session, idx, projectSessionsCount, cliLabel);
+
   return (
     <div
       ref={innerRef}
       style={style}
       {...dragHandleProps}
       onClick={onSelect}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        onDoubleClick();
+      }}
       className={`
         group relative flex items-center gap-2 px-3 py-1.5 rounded-t-lg cursor-pointer
         transition-all duration-200 border-t border-x border-transparent mb-[-1px]
@@ -64,9 +169,33 @@ function TabItem({
         <div className="absolute top-0 left-0 right-0 h-[2px] bg-blue-500 rounded-full shadow-[0_0_6px_rgba(59,130,246,0.8)]" />
       )}
 
-      <span className="font-mono text-xs truncate max-w-[100px]">
-        {cliLabel}{projectSessionsCount > 1 ? ` #${idx + 1}` : ""}
-      </span>
+      {isEditing ? (
+        <input
+          ref={inputRef}
+          type="text"
+          value={editValue}
+          onChange={(e) => onEditChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              onEditCommit();
+            } else if (e.key === "Escape") {
+              onEditCancel();
+            }
+          }}
+          onBlur={onEditCommit}
+          onClick={(e) => e.stopPropagation()}
+          className="font-mono text-xs bg-transparent border border-blue-500/50 rounded px-1 py-0 outline-none text-white w-[100px]"
+          placeholder={cliLabel}
+          maxLength={50}
+        />
+      ) : (
+        <span
+          className="font-mono text-xs truncate max-w-[100px]"
+          title={displayName}
+        >
+          {displayName}
+        </span>
+      )}
 
       {/* Status Indicator */}
       <div className={`
@@ -137,12 +266,18 @@ export function TerminalTabs() {
   const addSession = useStore((s) => s.addSession);
   const showPromptQueue = useStore((s) => s.showPromptQueue);
   const setShowPromptQueue = useStore((s) => s.setShowPromptQueue);
+  const renameSession = useStore((s) => s.renameSession);
+  const updateSession = useStore((s) => s.updateSession);
 
   const [cliMenu, setCliMenu] = useState<{ x: number; y: number } | null>(null);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   const [activeId, setActiveId] = useState<string | null>(null);
+
+  // Inline rename state
+  const [editingTabId, setEditingTabId] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -165,6 +300,30 @@ export function TerminalTabs() {
     ? sessions.filter((s) => s.projectId === activeProjectId)
     : [];
 
+  // -----------------------------------------------------------------------
+  // Auto-naming: attempt to fetch Claude Code conversation names for sessions
+  // that haven't been manually renamed.
+  // -----------------------------------------------------------------------
+  useEffect(() => {
+    if (!activeProject) return;
+
+    const sessionsToAutoName = projectSessions.filter(
+      (s) => !s.manuallyRenamed && !s.autoName && s.cli === "claude"
+    );
+
+    if (sessionsToAutoName.length === 0) return;
+
+    // Attempt auto-naming for each qualifying session
+    getClaudeAutoName(activeProject.path).then((autoName) => {
+      if (!autoName) return;
+      // Apply to sessions that still need naming
+      for (const session of sessionsToAutoName) {
+        updateSession(session.id, { autoName });
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProject?.path, projectSessions.length]);
+
   // Close CLI menu on outside click
   useEffect(() => {
     if (!cliMenu) return;
@@ -176,6 +335,27 @@ export function TerminalTabs() {
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
   }, [cliMenu]);
+
+  // -----------------------------------------------------------------------
+  // Inline rename handlers
+  // -----------------------------------------------------------------------
+  const handleStartEditing = useCallback((session: TerminalSession) => {
+    setEditingTabId(session.id);
+    setEditValue(session.customName || "");
+  }, []);
+
+  const handleEditCommit = useCallback(() => {
+    if (editingTabId) {
+      renameSession(editingTabId, editValue);
+      setEditingTabId(null);
+      setEditValue("");
+    }
+  }, [editingTabId, editValue, renameSession]);
+
+  const handleEditCancel = useCallback(() => {
+    setEditingTabId(null);
+    setEditValue("");
+  }, []);
 
   const handleAddSession = (cli: string) => {
     if (!activeProject) return;
@@ -269,26 +449,46 @@ export function TerminalTabs() {
                   e.stopPropagation();
                   removeSession(session.id);
                 }}
+                onDoubleClick={() => handleStartEditing(session)}
+                isEditing={editingTabId === session.id}
+                editValue={editValue}
+                onEditChange={setEditValue}
+                onEditCommit={handleEditCommit}
+                onEditCancel={handleEditCancel}
               />
             ))}
           </SortableContext>
         </div>
 
-        {/* Add session button */}
-        <button
-          onClick={handleAddClick}
-          onContextMenu={handleAddContextMenu}
-          onPointerDown={handleAddPointerDown}
-          onPointerUp={handleAddPointerUp}
-          onPointerLeave={handleAddPointerUp}
-          className="ml-2 w-8 h-8 flex items-center justify-center text-zinc-500 hover:text-white hover:bg-white/10 rounded-md transition-all duration-200"
-          title="New session (⌥/Alt+click or right-click to choose agent)"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="12" y1="5" x2="12" y2="19"></line>
-            <line x1="5" y1="12" x2="19" y2="12"></line>
-          </svg>
-        </button>
+        {/* Add session split button: main "+" and dropdown chevron */}
+        <div className="ml-2 flex items-center">
+          <button
+            onClick={handleAddClick}
+            onContextMenu={handleAddContextMenu}
+            onPointerDown={handleAddPointerDown}
+            onPointerUp={handleAddPointerUp}
+            onPointerLeave={handleAddPointerUp}
+            className="w-7 h-8 flex items-center justify-center text-zinc-500 hover:text-white hover:bg-white/10 rounded-l-md transition-all duration-200 border-r border-white/5"
+            title="New session (⌥/Alt+click or right-click to choose agent)"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+          </button>
+          <button
+            onClick={(e) => {
+              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              setCliMenu(cliMenu ? null : { x: rect.left - 160, y: rect.bottom + 4 });
+            }}
+            className="w-5 h-8 flex items-center justify-center text-zinc-500 hover:text-white hover:bg-white/10 rounded-r-md transition-all duration-200"
+            title="Choose agent for new session"
+          >
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+              <path d="M2 3.5 L5 7 L8 3.5" />
+            </svg>
+          </button>
+        </div>
 
         <div className="w-px h-5 bg-white/10 mx-2" />
 
@@ -347,13 +547,19 @@ export function TerminalTabs() {
       <DragOverlay dropAnimation={null}>
         {activeId ? (
           <TabItem
-            session={projectSessions.find(s => s.id === activeId)}
+            session={projectSessions.find(s => s.id === activeId)!}
             isActive={activeSessionId === activeId}
             idx={projectSessions.findIndex(s => s.id === activeId)}
             projectSessionsCount={projectSessions.length}
             cliLabel={projectSessions.find(s => s.id === activeId)?.cli || "claude"}
             onSelect={() => { }}
             onClose={() => { }}
+            onDoubleClick={() => { }}
+            isEditing={false}
+            editValue=""
+            onEditChange={() => { }}
+            onEditCommit={() => { }}
+            onEditCancel={() => { }}
             isOverlay
           />
         ) : null}

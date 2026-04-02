@@ -64,6 +64,8 @@ interface AppState {
     sessionId: string,
     status: TerminalSession["status"],
   ) => void;
+  updateSession: (sessionId: string, patch: Partial<TerminalSession>) => void;
+  renameSession: (sessionId: string, name: string) => void;
 
   showAddProject: boolean;
   setShowAddProject: (show: boolean) => void;
@@ -156,6 +158,24 @@ export const useStore = create<AppState>((set, get) => ({
     set((state) => ({
       sessions: state.sessions.map((s) =>
         s.id === sessionId ? { ...s, status } : s,
+      ),
+    })),
+
+  updateSession: (sessionId, patch) =>
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.id === sessionId ? { ...s, ...patch } : s,
+      ),
+    })),
+
+  renameSession: (sessionId, name) =>
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.id === sessionId
+          ? name.trim()
+            ? { ...s, customName: name.trim(), manuallyRenamed: true }
+            : { ...s, customName: undefined, manuallyRenamed: false }
+          : s,
       ),
     })),
 

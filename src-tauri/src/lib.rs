@@ -1,12 +1,15 @@
+mod claude_history;
 mod cmdop;
 mod projects;
 mod prompts;
 mod servers;
 mod ssh;
 mod tasks;
+mod tempfiles;
 
 use tauri::Manager;
 
+#[cfg(feature = "devtools")]
 #[tauri::command]
 fn toggle_devtools(window: tauri::WebviewWindow) {
     if window.is_devtools_open() {
@@ -14,6 +17,12 @@ fn toggle_devtools(window: tauri::WebviewWindow) {
     } else {
         window.open_devtools();
     }
+}
+
+#[cfg(not(feature = "devtools"))]
+#[tauri::command]
+fn toggle_devtools(_window: tauri::WebviewWindow) {
+    // DevTools disabled in release build
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -49,12 +58,15 @@ pub fn run() {
             ssh::ssh_list_dirs,
             tasks::get_tasks,
             tasks::save_tasks,
+            tempfiles::save_temp_file,
+            claude_history::get_claude_auto_name,
             toggle_devtools,
         ])
         .setup(|app| {
             app.manage(cmdop::CmdopState::default());
             
             // Auto-open DevTools during development
+            #[cfg(feature = "devtools")]
             if let Some(window) = app.get_webview_window("main") {
                 window.open_devtools();
             }

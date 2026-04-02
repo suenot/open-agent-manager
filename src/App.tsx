@@ -92,30 +92,40 @@ function App() {
       // Collect all media items: legacy images + new attachments
       const allMedia: { dataUrl: string; name: string }[] = [];
       for (const img of card.images || []) {
-        allMedia.push({ dataUrl: img, name: "pasted-image" });
+        allMedia.push({ dataUrl: img, name: "pasted-image.png" });
       }
       for (const att of card.attachments || []) {
         allMedia.push({ dataUrl: att.dataUrl, name: att.name });
       }
 
-      // Sequential paste: files first (one by one), then text last.
-      // Each file is pasted by writing its data URL path to the terminal.
-      // For Claude Code, images/files are typically pasted via the clipboard,
-      // but in a PTY context we write the base64 data as text.
-      // The approach: for each media, write a reference line, then pause briefly.
-      for (let i = 0; i < allMedia.length; i++) {
-        const media = allMedia[i];
-        // Write file content as a base64 data URL line that CLI agents can parse
-        ptyRegistry.write(sid, media.dataUrl);
-        // Small delay between items so the terminal can process each one
-        if (i < allMedia.length - 1 || card.text.trim()) {
-          await new Promise((resolve) => setTimeout(resolve, 200));
+      // Save each media item to a temp file, then write the file path to the terminal.
+      // This avoids dumping huge base64 strings into the PTY. CLI agents like
+      // Claude Code can accept file paths as arguments.
+      const filePaths: string[] = [];
+      for (const media of allMedia) {
+        try {
+          const filePath = await invoke<string>("save_temp_file", {
+            data: media.dataUrl,
+            name: media.name,
+          });
+          filePaths.push(filePath);
+        } catch (err) {
+          console.error("Failed to save temp file:", media.name, err);
         }
       }
 
-      // Finally, paste the text content
+      // Build the text to write to the terminal:
+      // file paths first (space-separated on one line), then the prompt text.
+      const parts: string[] = [];
+      if (filePaths.length > 0) {
+        parts.push(filePaths.join(" "));
+      }
       if (card.text.trim()) {
-        ptyRegistry.write(sid, card.text.trim() + "\n");
+        parts.push(card.text.trim());
+      }
+
+      if (parts.length > 0) {
+        ptyRegistry.write(sid, parts.join(" ") + "\n");
       }
 
       removePrompt(projectId, cardId);
