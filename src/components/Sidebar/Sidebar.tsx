@@ -178,6 +178,8 @@ export function Sidebar() {
   const setShowServerList = useStore((s) => s.setShowServerList);
   const setEditingServer = useStore((s) => s.setEditingServer);
   const addError = useStore((s) => s.addError);
+  const showFileBrowser = useStore((s) => s.showFileBrowser);
+  const toggleFileBrowser = useStore((s) => s.toggleFileBrowser);
 
   const [width, setWidth] = useState(280);
   const [isResizing, setIsResizing] = useState(false);
@@ -395,16 +397,31 @@ export function Sidebar() {
         </div>
 
         <div className="flex-shrink-0 px-3 pb-3 space-y-2">
-          <button
-            onClick={() => {
-              setEditingProject(null);
-              setShowAddProject(true);
-            }}
-            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-blue-500/30 text-blue-400 text-xs font-medium hover:bg-blue-500/10 hover:border-blue-500/50 transition-all active:scale-[0.98]"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            Add Project
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => {
+                setEditingProject(null);
+                setShowAddProject(true);
+              }}
+              className="flex-1 flex items-center justify-center gap-1.5 px-2 py-2 rounded-lg border border-blue-500/30 text-blue-400 text-xs font-medium hover:bg-blue-500/10 hover:border-blue-500/50 transition-all active:scale-[0.98]"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              Add Project
+            </button>
+            <button
+              onClick={() => toggleFileBrowser()}
+              className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border text-xs font-medium transition-all active:scale-[0.98] ${
+                showFileBrowser
+                  ? "border-emerald-500/40 text-emerald-400 bg-emerald-500/10"
+                  : "border-white/10 text-zinc-500 hover:bg-white/5 hover:text-zinc-300 hover:border-white/20"
+              }`}
+              title="Toggle file browser"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+              </svg>
+            </button>
+          </div>
           <div className="text-center text-[10px] text-zinc-700 font-mono tracking-wide">
             Open Agent Manager v{__APP_VERSION__}
           </div>

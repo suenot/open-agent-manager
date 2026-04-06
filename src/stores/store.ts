@@ -134,6 +134,10 @@ interface AppState {
   addError: (source: string, message: string, details?: string) => void;
   clearErrors: () => void;
   removeError: (id: string) => void;
+
+  showFileBrowser: boolean;
+  setShowFileBrowser: (show: boolean) => void;
+  toggleFileBrowser: () => void;
 }
 
 const STABLE_EMPTY_ARRAY: any[] = [];
@@ -327,6 +331,10 @@ export const useStore = create<AppState>((set, get) => ({
     saveCmdopAuth(auth);
     set({ cmdopAuth: auth });
   },
+
+  showFileBrowser: false,
+  setShowFileBrowser: (show) => set({ showFileBrowser: show }),
+  toggleFileBrowser: () => set((state) => ({ showFileBrowser: !state.showFileBrowser })),
 
   errors: [],
   addError: (source, message, details) =>

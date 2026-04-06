@@ -1,5 +1,6 @@
 mod claude_history;
 mod cmdop;
+mod files;
 mod projects;
 mod prompts;
 mod servers;
@@ -65,6 +66,7 @@ pub fn run() {
             claude_history::find_claude_session_by_cwd,
             sessions::get_sessions,
             sessions::save_sessions,
+            files::list_directory,
             toggle_devtools,
         ])
         .setup(|app| {

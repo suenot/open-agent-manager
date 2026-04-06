@@ -51,19 +51,25 @@ body,
   background: rgba(255, 255, 255, 0.2);
 }
 
-/* Terminal container improvements */
+/* Terminal container improvements —
+   Left padding lives on the outer container so FitAddon calculates
+   the correct column count and the canvas never gets offset. */
 .terminal-container {
   width: 100%;
   height: 100%;
   position: relative;
   overflow: hidden;
   box-sizing: border-box;
+  padding-left: 12px;
 }
 
 .terminal-container .xterm {
   height: 100%;
-  padding: 0 0 0 12px;
-  /* Add left padding to terminal content */
+}
+
+.terminal-container .xterm .xterm-screen {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .terminal-container .xterm .xterm-viewport {
@@ -88,12 +94,6 @@ body,
 
 .xterm-viewport::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.2);
-}
-
-
-.terminal-container .xterm .xterm-screen {
-  user-select: text;
-  -webkit-user-select: text;
 }
 
 .terminal-container .xterm-helper-textarea {

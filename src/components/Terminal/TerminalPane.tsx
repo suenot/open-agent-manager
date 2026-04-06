@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { spawn } from "tauri-pty";
 import type { IPty } from "tauri-pty";
 import { invoke } from "@tauri-apps/api/core";
@@ -96,6 +97,17 @@ export function TerminalPane({
     terminal.loadAddon(fitAddon);
     terminal.open(containerRef.current);
 
+    // Use WebGL renderer for stable rendering (fixes canvas glitches on macOS Retina)
+    try {
+      const webglAddon = new WebglAddon();
+      webglAddon.onContextLoss(() => {
+        webglAddon.dispose();
+      });
+      terminal.loadAddon(webglAddon);
+    } catch (e) {
+      console.warn(`[Terminal ${sessionId}] WebGL addon failed, using canvas fallback:`, e);
+    }
+
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
 
@@ -103,10 +115,33 @@ export function TerminalPane({
     const rect = containerRef.current.getBoundingClientRect();
     console.log(`[Terminal ${sessionId}] container: ${rect.width}x${rect.height}, cols=${terminal.cols}, rows=${terminal.rows}, cwd=${cwd}`);
 
+    // Helper: fit terminal while preserving scroll position through reflow.
+    // Saves viewportY (line index) before fit and restores after.
+    // On reflow (column change) line numbers shift, so we also track
+    // the distance-from-bottom in lines to get a better estimate.
+    const safeFit = (term: Terminal, addon: FitAddon) => {
+      const buf = term.buffer.active;
+      const savedViewportY = buf.viewportY;
+      const linesFromBottom = buf.baseY - buf.viewportY;
+      const wasAtBottom = linesFromBottom <= 1;
+
+      addon.fit();
+
+      if (!wasAtBottom) {
+        // Prefer restoring by distance-from-bottom (more stable across reflow)
+        const targetLine = Math.max(0, buf.baseY - linesFromBottom);
+        term.scrollToLine(targetLine);
+        // Re-apply after xterm's async DOM update
+        requestAnimationFrame(() => {
+          term.scrollToLine(Math.max(0, buf.baseY - linesFromBottom));
+        });
+      }
+    };
+
     // Fit after DOM settles
     requestAnimationFrame(() => {
       try {
-        fitAddon.fit();
+        safeFit(terminal, fitAddon);
         console.log(`[Terminal ${sessionId}] after fit: cols=${terminal.cols}, rows=${terminal.rows}`);
       } catch {
         // ignore
@@ -121,7 +156,7 @@ export function TerminalPane({
           if (resizeTimer) clearTimeout(resizeTimer);
           resizeTimer = setTimeout(() => {
             try {
-              fitAddon.fit();
+              safeFit(terminal, fitAddon);
               if (ptyRef.current && ptyAliveRef.current) {
                 ptyRef.current.resize(terminal.cols, terminal.rows);
               }
@@ -343,13 +378,34 @@ export function TerminalPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, cwd]);
 
+  // Helper: fit with scroll preservation (for effects)
+  const safeFitFromRefs = () => {
+    const term = terminalRef.current;
+    const addon = fitAddonRef.current;
+    if (!term || !addon) return;
+
+    const buf = term.buffer.active;
+    const linesFromBottom = buf.baseY - buf.viewportY;
+    const wasAtBottom = linesFromBottom <= 1;
+
+    addon.fit();
+
+    if (!wasAtBottom) {
+      const targetLine = Math.max(0, buf.baseY - linesFromBottom);
+      term.scrollToLine(targetLine);
+      requestAnimationFrame(() => {
+        term.scrollToLine(Math.max(0, buf.baseY - linesFromBottom));
+      });
+    }
+  };
+
   // Re-fit when tab becomes visible
   useEffect(() => {
     if (!isVisible || !fitAddonRef.current || !terminalRef.current) return;
 
     const timer = setTimeout(() => {
       try {
-        fitAddonRef.current?.fit();
+        safeFitFromRefs();
         if (ptyRef.current && ptyAliveRef.current && terminalRef.current) {
           ptyRef.current.resize(terminalRef.current.cols, terminalRef.current.rows);
         }
@@ -366,7 +422,7 @@ export function TerminalPane({
     const onResize = () => {
       if (!isVisible) return;
       try {
-        fitAddonRef.current?.fit();
+        safeFitFromRefs();
         if (ptyRef.current && ptyAliveRef.current && terminalRef.current) {
           ptyRef.current.resize(terminalRef.current.cols, terminalRef.current.rows);
         }

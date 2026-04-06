@@ -11,6 +11,7 @@ import { ServerListModal } from "./components/Sidebar/ServerListModal";
 import { AddServerModal } from "./components/Sidebar/AddServerModal";
 import { TerminalTabs } from "./components/Terminal/TerminalTabs";
 import { ErrorOverlay } from "./components/ErrorOverlay/ErrorOverlay";
+import { FileBrowser } from "./components/FileBrowser/FileBrowser";
 import { ptyRegistry } from "./utils/ptyRegistry";
 import type { Project, Server, TerminalSession } from "./types";
 
@@ -71,6 +72,7 @@ function App() {
   }, [setProjects, setServers, setSessions, setActiveSessionId, addError]);
 
   const toggleSidebar = useStore((s) => s.toggleSidebar);
+  const toggleFileBrowser = useStore((s) => s.toggleFileBrowser);
 
   useEffect(() => {
     const handleError = (e: ErrorEvent) => {
@@ -84,6 +86,10 @@ function App() {
         e.preventDefault();
         toggleSidebar();
       }
+      if ((e.metaKey || e.ctrlKey) && e.key === "e") {
+        e.preventDefault();
+        toggleFileBrowser();
+      }
     };
 
     window.addEventListener("error", handleError);
@@ -94,7 +100,7 @@ function App() {
       window.removeEventListener("unhandledrejection", handleRejection);
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [addError, toggleSidebar]);
+  }, [addError, toggleSidebar, toggleFileBrowser]);
 
   // Kill all PTY processes when window is closing to prevent app hang
   useEffect(() => {
@@ -197,6 +203,9 @@ function App() {
         <TerminalTabs />
 
         <div className="flex-1 flex min-h-0 relative">
+          {/* File browser overlay — doesn't affect terminal width */}
+          <FileBrowser />
+
           {/* Terminal area — drop zone for prompt cards */}
           <div
             className={`flex-1 relative bg-zinc-950 transition-all duration-200 ${dropHighlight ? "ring-2 ring-inset ring-blue-500/40" : ""}`}
