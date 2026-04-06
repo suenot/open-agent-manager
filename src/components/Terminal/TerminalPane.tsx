@@ -1,7 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { WebglAddon } from "@xterm/addon-webgl";
 import { spawn } from "tauri-pty";
 import type { IPty } from "tauri-pty";
 import { invoke } from "@tauri-apps/api/core";
@@ -97,17 +96,6 @@ export function TerminalPane({
     terminal.loadAddon(fitAddon);
     terminal.open(containerRef.current);
 
-    // Use WebGL renderer for stable rendering (fixes canvas glitches on macOS Retina)
-    try {
-      const webglAddon = new WebglAddon();
-      webglAddon.onContextLoss(() => {
-        webglAddon.dispose();
-      });
-      terminal.loadAddon(webglAddon);
-    } catch (e) {
-      console.warn(`[Terminal ${sessionId}] WebGL addon failed, using canvas fallback:`, e);
-    }
-
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
 
@@ -115,57 +103,41 @@ export function TerminalPane({
     const rect = containerRef.current.getBoundingClientRect();
     console.log(`[Terminal ${sessionId}] container: ${rect.width}x${rect.height}, cols=${terminal.cols}, rows=${terminal.rows}, cwd=${cwd}`);
 
-    // Helper: fit terminal while preserving scroll position through reflow.
-    // Saves viewportY (line index) before fit and restores after.
-    // On reflow (column change) line numbers shift, so we also track
-    // the distance-from-bottom in lines to get a better estimate.
-    const safeFit = (term: Terminal, addon: FitAddon) => {
-      const buf = term.buffer.active;
-      const savedViewportY = buf.viewportY;
-      const linesFromBottom = buf.baseY - buf.viewportY;
-      const wasAtBottom = linesFromBottom <= 1;
-
-      addon.fit();
-
-      if (!wasAtBottom) {
-        // Prefer restoring by distance-from-bottom (more stable across reflow)
-        const targetLine = Math.max(0, buf.baseY - linesFromBottom);
-        term.scrollToLine(targetLine);
-        // Re-apply after xterm's async DOM update
-        requestAnimationFrame(() => {
-          term.scrollToLine(Math.max(0, buf.baseY - linesFromBottom));
-        });
-      }
-    };
-
-    // Fit after DOM settles
+    // Fit after DOM settles (no scroll to preserve on first render)
     requestAnimationFrame(() => {
       try {
-        safeFit(terminal, fitAddon);
+        fitAddon.fit();
         console.log(`[Terminal ${sessionId}] after fit: cols=${terminal.cols}, rows=${terminal.rows}`);
       } catch {
         // ignore
       }
     });
 
-    // ResizeObserver for container size changes
+    // Use xterm's own onResize event to scrollToBottom AFTER resize completes
+    terminal.onResize(() => {
+      console.log(`[Terminal ${sessionId}] onResize fired: cols=${terminal.cols}, rows=${terminal.rows}, baseY=${terminal.buffer.active.baseY}, viewportY=${terminal.buffer.active.viewportY}`);
+      terminal.scrollToBottom();
+      console.log(`[Terminal ${sessionId}] after scrollToBottom: viewportY=${terminal.buffer.active.viewportY}`);
+    });
+
+    // ResizeObserver — fit, resize PTY, then scroll to bottom after PTY
+    // response data has been written (PTY sends escape sequences on resize
+    // which trigger terminal.write() and can move the viewport).
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
-    const resizeObserver = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        if (entry.contentRect.width > 0 && entry.contentRect.height > 0) {
-          if (resizeTimer) clearTimeout(resizeTimer);
-          resizeTimer = setTimeout(() => {
-            try {
-              safeFit(terminal, fitAddon);
-              if (ptyRef.current && ptyAliveRef.current) {
-                ptyRef.current.resize(terminal.cols, terminal.rows);
-              }
-            } catch {
-              // ignore
-            }
-          }, 50);
+    const resizeObserver = new ResizeObserver(() => {
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        try {
+          fitAddon.fit();
+          if (ptyRef.current && ptyAliveRef.current) {
+            ptyRef.current.resize(terminal.cols, terminal.rows);
+          }
+          // Wait for PTY resize response to be written, then scroll
+          setTimeout(() => terminal.scrollToBottom(), 500);
+        } catch {
+          // ignore
         }
-      }
+      }, 200);
     });
     resizeObserver.observe(containerRef.current);
 
@@ -378,37 +350,17 @@ export function TerminalPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, cwd]);
 
-  // Helper: fit with scroll preservation (for effects)
-  const safeFitFromRefs = () => {
-    const term = terminalRef.current;
-    const addon = fitAddonRef.current;
-    if (!term || !addon) return;
-
-    const buf = term.buffer.active;
-    const linesFromBottom = buf.baseY - buf.viewportY;
-    const wasAtBottom = linesFromBottom <= 1;
-
-    addon.fit();
-
-    if (!wasAtBottom) {
-      const targetLine = Math.max(0, buf.baseY - linesFromBottom);
-      term.scrollToLine(targetLine);
-      requestAnimationFrame(() => {
-        term.scrollToLine(Math.max(0, buf.baseY - linesFromBottom));
-      });
-    }
-  };
-
   // Re-fit when tab becomes visible
   useEffect(() => {
     if (!isVisible || !fitAddonRef.current || !terminalRef.current) return;
 
     const timer = setTimeout(() => {
       try {
-        safeFitFromRefs();
+        fitAddonRef.current?.fit();
         if (ptyRef.current && ptyAliveRef.current && terminalRef.current) {
           ptyRef.current.resize(terminalRef.current.cols, terminalRef.current.rows);
         }
+        setTimeout(() => terminalRef.current?.scrollToBottom(), 500);
       } catch {
         // ignore
       }
@@ -417,23 +369,8 @@ export function TerminalPane({
     return () => clearTimeout(timer);
   }, [isVisible]);
 
-  // Window resize
-  useEffect(() => {
-    const onResize = () => {
-      if (!isVisible) return;
-      try {
-        safeFitFromRefs();
-        if (ptyRef.current && ptyAliveRef.current && terminalRef.current) {
-          ptyRef.current.resize(terminalRef.current.cols, terminalRef.current.rows);
-        }
-      } catch {
-        // ignore
-      }
-    };
-
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [isVisible]);
+  // Note: window resize is handled by ResizeObserver in the init effect.
+  // No separate window resize listener needed — avoids double-trigger conflicts.
 
   return (
     <div

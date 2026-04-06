@@ -72,8 +72,9 @@ body,
   -webkit-user-select: text;
 }
 
+/* Do NOT override overflow on .xterm-viewport — xterm.js manages it
+   internally and overriding it breaks scrollToBottom/syncScrollArea. */
 .terminal-container .xterm .xterm-viewport {
-  overflow-y: auto;
   background-color: var(--color-bg-app) !important;
 }
 

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { WebglAddon } from "@xterm/addon-webgl";
 import { invoke } from "@tauri-apps/api/core";
 import "@xterm/xterm/css/xterm.css";
 import { useStore, type AppSettings } from "../../stores/store";
@@ -106,15 +105,6 @@ function RemoteTerminalInner({
     terminal.loadAddon(fitAddon);
     terminal.open(containerRef.current);
 
-    try {
-      const webglAddon = new WebglAddon();
-      webglAddon.onContextLoss(() => {
-        webglAddon.dispose();
-      });
-      terminal.loadAddon(webglAddon);
-    } catch (e) {
-      console.warn(`[RemoteTerminal ${sessionId}] WebGL addon failed, using canvas fallback:`, e);
-    }
 
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
@@ -229,61 +219,32 @@ function RemoteTerminalInner({
     });
 
 
-    // Helper: fit terminal while preserving scroll position
-    const safeFit = (term: Terminal, addon: FitAddon) => {
-      const buf = term.buffer.active;
-      const linesFromBottom = buf.baseY - buf.viewportY;
-      const wasAtBottom = linesFromBottom <= 1;
-
-      addon.fit();
-
-      if (!wasAtBottom) {
-        const targetLine = Math.max(0, buf.baseY - linesFromBottom);
-        term.scrollToLine(targetLine);
-        requestAnimationFrame(() => {
-          term.scrollToLine(Math.max(0, buf.baseY - linesFromBottom));
-        });
-      }
-    };
-
-    // Resize handling
+    // Resize handling — fit, resize remote, scroll to bottom after response
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
-    const handleResize = () => {
+    const resizeObserver = new ResizeObserver(() => {
       if (resizeTimer) clearTimeout(resizeTimer);
       resizeTimer = setTimeout(async () => {
         try {
           if (!terminalRef.current || !fitAddonRef.current) return;
-          safeFit(terminalRef.current, fitAddonRef.current);
+          fitAddonRef.current.fit();
           const { cols, rows } = terminalRef.current;
           await invoke("cmdop_resize_terminal", {
             streamId: sessionId,
             cols,
             rows,
           });
-          console.log(`[RemoteTerminal ${sessionId}] resized to ${cols}x${rows}`);
+          setTimeout(() => terminalRef.current?.scrollToBottom(), 500);
         } catch (err) {
           console.warn("[RemoteTerminal] resize error:", err);
         }
-      }, 50);
-    };
-
-    const resizeObserver = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        if (entry.contentRect.width > 0 && entry.contentRect.height > 0) {
-          handleResize();
-        }
-      }
+      }, 200);
     });
 
     if (containerRef.current) {
       resizeObserver.observe(containerRef.current);
     }
 
-    // Explicit window resize listener for extra safety
-    window.addEventListener("resize", handleResize);
-
     return () => {
-      window.removeEventListener("resize", handleResize);
       if (unlisten) unlisten();
       if (resizeTimer) clearTimeout(resizeTimer);
       resizeObserver.disconnect();
@@ -301,40 +262,17 @@ function RemoteTerminalInner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, cmdopSessionId, remote.machine]);
 
-  // Helper: fit with scroll preservation (for effects)
-  const safeFitFromRefs = () => {
-    const term = terminalRef.current;
-    const addon = fitAddonRef.current;
-    if (!term || !addon) return;
-
-    const buf = term.buffer.active;
-    const linesFromBottom = buf.baseY - buf.viewportY;
-    const wasAtBottom = linesFromBottom <= 1;
-
-    addon.fit();
-
-    if (!wasAtBottom) {
-      const targetLine = Math.max(0, buf.baseY - linesFromBottom);
-      term.scrollToLine(targetLine);
-      requestAnimationFrame(() => {
-        term.scrollToLine(Math.max(0, buf.baseY - linesFromBottom));
-      });
-    }
-  };
-
   // Re-fit when tab becomes visible
   useEffect(() => {
-    if (!isVisible || !fitAddonRef.current) return;
+    if (!isVisible || !fitAddonRef.current || !terminalRef.current) return;
+
     const timer = setTimeout(() => {
       try {
-        safeFitFromRefs();
+        fitAddonRef.current?.fit();
         if (terminalRef.current) {
           const { cols, rows } = terminalRef.current;
-          invoke("cmdop_resize_terminal", {
-            streamId: sessionId,
-            cols,
-            rows,
-          }).catch(console.error);
+          invoke("cmdop_resize_terminal", { streamId: sessionId, cols, rows }).catch(console.error);
+          setTimeout(() => terminalRef.current?.scrollToBottom(), 500);
         }
       } catch {
         // ignore
@@ -343,27 +281,7 @@ function RemoteTerminalInner({
     return () => clearTimeout(timer);
   }, [isVisible, sessionId]);
 
-  // Window resize
-  useEffect(() => {
-    const onResize = () => {
-      if (!isVisible) return;
-      try {
-        safeFitFromRefs();
-        if (terminalRef.current) {
-          const { cols, rows } = terminalRef.current;
-          invoke("cmdop_resize_terminal", {
-            streamId: sessionId,
-            cols,
-            rows,
-          }).catch(console.error);
-        }
-      } catch {
-        // ignore
-      }
-    };
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [isVisible, sessionId]);
+  // Note: window resize is handled by ResizeObserver in the init effect.
 
   return (
     <div
