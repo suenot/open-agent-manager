@@ -120,22 +120,27 @@ export function TerminalPane({
       console.log(`[Terminal ${sessionId}] after scrollToBottom: viewportY=${terminal.buffer.active.viewportY}`);
     });
 
-    // ResizeObserver — fit, resize PTY, then scroll to bottom after PTY
-    // response data has been written (PTY sends escape sequences on resize
-    // which trigger terminal.write() and can move the viewport).
+    // ResizeObserver — hide terminal during fit+PTY response to prevent
+    // visible scroll jump. xterm canvas renders by ydisp, not scrollTop,
+    // so overflow:hidden doesn't help — must hide the whole element.
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
     const resizeObserver = new ResizeObserver(() => {
       if (resizeTimer) clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
         try {
+          if (containerRef.current) containerRef.current.style.visibility = 'hidden';
+
           fitAddon.fit();
           if (ptyRef.current && ptyAliveRef.current) {
             ptyRef.current.resize(terminal.cols, terminal.rows);
           }
-          // Wait for PTY resize response to be written, then scroll
-          setTimeout(() => terminal.scrollToBottom(), 500);
+
+          setTimeout(() => {
+            terminal.scrollToBottom();
+            if (containerRef.current) containerRef.current.style.visibility = '';
+          }, 500);
         } catch {
-          // ignore
+          if (containerRef.current) containerRef.current.style.visibility = '';
         }
       }, 200);
     });
@@ -356,13 +361,17 @@ export function TerminalPane({
 
     const timer = setTimeout(() => {
       try {
+        if (containerRef.current) containerRef.current.style.visibility = 'hidden';
         fitAddonRef.current?.fit();
         if (ptyRef.current && ptyAliveRef.current && terminalRef.current) {
           ptyRef.current.resize(terminalRef.current.cols, terminalRef.current.rows);
         }
-        setTimeout(() => terminalRef.current?.scrollToBottom(), 500);
+        setTimeout(() => {
+          terminalRef.current?.scrollToBottom();
+          if (containerRef.current) containerRef.current.style.visibility = '';
+        }, 500);
       } catch {
-        // ignore
+        if (containerRef.current) containerRef.current.style.visibility = '';
       }
     }, 50);
 

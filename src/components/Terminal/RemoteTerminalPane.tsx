@@ -219,13 +219,15 @@ function RemoteTerminalInner({
     });
 
 
-    // Resize handling — fit, resize remote, scroll to bottom after response
+    // Resize handling — hide terminal during fit to prevent visible scroll jump
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
     const resizeObserver = new ResizeObserver(() => {
       if (resizeTimer) clearTimeout(resizeTimer);
       resizeTimer = setTimeout(async () => {
         try {
           if (!terminalRef.current || !fitAddonRef.current) return;
+          if (containerRef.current) containerRef.current.style.visibility = 'hidden';
+
           fitAddonRef.current.fit();
           const { cols, rows } = terminalRef.current;
           await invoke("cmdop_resize_terminal", {
@@ -233,8 +235,13 @@ function RemoteTerminalInner({
             cols,
             rows,
           });
-          setTimeout(() => terminalRef.current?.scrollToBottom(), 500);
+
+          setTimeout(() => {
+            terminalRef.current?.scrollToBottom();
+            if (containerRef.current) containerRef.current.style.visibility = '';
+          }, 500);
         } catch (err) {
+          if (containerRef.current) containerRef.current.style.visibility = '';
           console.warn("[RemoteTerminal] resize error:", err);
         }
       }, 200);
@@ -268,14 +275,18 @@ function RemoteTerminalInner({
 
     const timer = setTimeout(() => {
       try {
+        if (containerRef.current) containerRef.current.style.visibility = 'hidden';
         fitAddonRef.current?.fit();
         if (terminalRef.current) {
           const { cols, rows } = terminalRef.current;
           invoke("cmdop_resize_terminal", { streamId: sessionId, cols, rows }).catch(console.error);
-          setTimeout(() => terminalRef.current?.scrollToBottom(), 500);
+          setTimeout(() => {
+            terminalRef.current?.scrollToBottom();
+            if (containerRef.current) containerRef.current.style.visibility = '';
+          }, 500);
         }
       } catch {
-        // ignore
+        if (containerRef.current) containerRef.current.style.visibility = '';
       }
     }, 50);
     return () => clearTimeout(timer);
